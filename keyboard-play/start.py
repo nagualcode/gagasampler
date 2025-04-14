@@ -5,25 +5,25 @@ import queue
 import atexit
 import os
 import subprocess
+import random
 from sshkeyboard import listen_keyboard
 
 LOG_FILE = "/tmp/gagasampler.log"
+DB_FILE = "/tmp/gagasampler.db"
+
+key_queue = queue.Queue()
 
 # Restaura o echo do terminal ao sair
 atexit.register(lambda: os.system('stty echo'))
-
-# Fila para capturar teclas
-key_queue = queue.Queue()
 
 def on_press(key):
     key_queue.put(key)
 
 def start_keyboard_listener():
-    listener_thread = threading.Thread(
+    threading.Thread(
         target=lambda: listen_keyboard(on_press=on_press),
         daemon=True
-    )
-    listener_thread.start()
+    ).start()
 
 def get_key(timeout=0.1):
     try:
@@ -32,7 +32,6 @@ def get_key(timeout=0.1):
         return None
 
 def setup_logging():
-    # Limpa o log anterior ao iniciar nova jogada
     with open(LOG_FILE, "w") as f:
         f.write("=== NOVA JOGADA INICIADA ===\n")
     logging.basicConfig(
@@ -61,46 +60,50 @@ def play_sequence(user_sequence):
         threading.Thread(target=play_sound, args=(sound_file,), daemon=True).start()
         time.sleep(0.5)
 
+def read_sequence_history():
+    if not os.path.exists(DB_FILE):
+        return set()
+    with open(DB_FILE, "r") as f:
+        return set(line.strip() for line in f.readlines())
+
+def append_sequence(seq_str):
+    with open(DB_FILE, "a") as f:
+        f.write(seq_str + "\n")
+
+def get_random_win_offset():
+    return random.choice([3, 4, 5, 6])
+
 def play_game():
     user_sequence = []
     click_count = 0
-    sequence_history = []
 
     print("Aguardando a tecla '0' para iniciar...")
-
     start_keyboard_listener()
 
-    # Aguarda tecla de início
     while True:
         key = get_key()
-        if key is not None and key == '0':
+        if key == '0':
             setup_logging()
             logging.info("Tecla START ('0') pressionada")
             threading.Thread(target=play_sound, args=("start.wav",), daemon=True).start()
             break
         time.sleep(0.1)
 
+    # Lê histórico
+    sequence_history = read_sequence_history()
+    total_attempts = len(sequence_history)
+    winning_attempt = total_attempts + get_random_win_offset()
+    logging.info(f"Tentativa sorteada para vitória: {winning_attempt}")
+
     start_time = time.time()
-
-    def handle_result():
-        sequence_str = ",".join(map(str, user_sequence))
-        logging.info(f"Sequência registrada: {sequence_str}")
-        if sequence_str in sequence_history:
-            logging.warning(f"Sequência repetida detectada: {sequence_str}")
-        else:
-            sequence_history.append(sequence_str)
-            logging.info(f"Nova sequência salva: {sequence_str}")
-        logging.info("=== FIM DA JOGADA ===")
-
     play_threads = []
 
     while click_count < 6:
         key = get_key()
-        if key is not None and key in [str(i) for i in range(1, 10)]:
+        if key and key in [str(i) for i in range(1, 10)]:
             timestamp = time.time() - start_time
             logging.info(f"Tecla '{key}' detectada aos {timestamp:.2f} segundos")
-            sound_file = f"{int(key):02d}.wav"
-            thread = threading.Thread(target=play_sound, args=(sound_file,))
+            thread = threading.Thread(target=play_sound, args=(f"{int(key):02d}.wav",))
             thread.start()
             play_threads.append(thread)
             user_sequence.append(key)
@@ -111,8 +114,35 @@ def play_game():
                 logging.info("Aguardando o fim dos sons da jogada...")
                 for t in play_threads:
                     t.join()
-                handle_result()
+
+                # Processa a jogada
+                seq_str = ",".join(map(str, user_sequence))
+                logging.info(f"Sequência registrada: {seq_str}")
+
+                # Toca a sequência final (fXX.wav)
                 play_sequence(user_sequence)
+
+                is_unique = seq_str not in sequence_history
+                logging.info("Verificando unicidade da sequência...")
+
+                if not is_unique:
+                    logging.warning("Sequência repetida detectada!")
+                    play_sound("obrigado.wav")
+                    logging.info("=== FIM DA JOGADA ===")
+                    break
+
+                # Sequência inédita: salvar e verificar se é premiada
+                append_sequence(seq_str)
+                total_attempts += 1
+
+                if total_attempts == winning_attempt:
+                    logging.info("🎉 VENCEDOR DETECTADO!")
+                    play_sound("win.wav")
+                else:
+                    logging.info("Não foi premiado nesta tentativa.")
+                    play_sound("obrigado.wav")
+
+                logging.info("=== FIM DA JOGADA ===")
                 break
 
         time.sleep(0.1)
