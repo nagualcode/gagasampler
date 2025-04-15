@@ -1,7 +1,5 @@
 import http.server
 import socketserver
-import threading
-import time
 import os
 
 LOG_PATH = "/tmp/gagasampler.log"
@@ -14,7 +12,7 @@ class LogRequestHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-type", "text/html")
             self.end_headers()
 
-            self.wfile.write(b"""<!DOCTYPE html>
+            html = """<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
@@ -42,12 +40,15 @@ class LogRequestHandler(http.server.SimpleHTTPRequestHandler):
     <h2>🎛 Gaga Sampler - Log em tempo real</h2>
     <div id="log">Carregando log...</div>
 </body>
-</html>""")
+</html>"""
+
+            self.wfile.write(html.encode("utf-8"))
 
         elif self.path == "/log.html":
             self.send_response(200)
             self.send_header("Content-type", "text/html")
             self.end_headers()
+
             if os.path.exists(LOG_PATH):
                 with open(LOG_PATH, "r") as f:
                     lines = f.readlines()
@@ -63,12 +64,10 @@ class LogRequestHandler(http.server.SimpleHTTPRequestHandler):
                         css_class = "win"
                     elif "erro" in lower or "repetida" in lower:
                         css_class = "error"
-                    elif "repetida" in lower:
-                        css_class = "repetida"
                     html_lines.append(f'<div class="log-line {css_class}">{line.strip()}</div>')
                 self.wfile.write("\n".join(html_lines).encode("utf-8"))
             else:
-                self.wfile.write(b"<i>(log ainda não criado)</i>")
+                self.wfile.write("<i>(log ainda não criado)</i>".encode("utf-8"))
 
         else:
             self.send_error(404, "Arquivo não encontrado")
@@ -83,4 +82,3 @@ if __name__ == "__main__":
         start_server()
     except PermissionError:
         print("❌ Permissão negada! Rode como sudo para usar a porta 80.")
-

@@ -33,7 +33,7 @@ def get_key(timeout=0.1):
 
 def setup_logging():
     with open(LOG_FILE, "w") as f:
-        f.write("=== NOVA JOGADA INICIADA ===\n")
+        f.write("=== SISTEMA INICIADO ===\n")
     logging.basicConfig(
         level=logging.DEBUG,
         format='%(asctime)s - %(message)s',
@@ -43,12 +43,16 @@ def setup_logging():
         ]
     )
 
+def reset_log_for_jogada(jogada_num):
+    with open(LOG_FILE, "w") as f:
+        f.write(f"=== NOVA JOGADA #{jogada_num} INICIADA ===\n")
+
 def play_sound(sound_file):
     full_path = f"samples/{sound_file}"
     try:
-        logging.info(f"Tocando som: {sound_file}")
+        logging.info(f"{sound_file}")
         subprocess.run(['aplay', full_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        logging.info(f"Som finalizado: {sound_file}")
+      #  logging.info(f"Som finalizado: {sound_file}")
     except Exception as e:
         logging.error(f"Erro ao tocar {sound_file}: {e}")
 
@@ -56,7 +60,7 @@ def play_sequence(user_sequence):
     logging.info("Iniciando sequência de sons (fXX.wav)...")
     for key in user_sequence:
         sound_file = f"f{int(key):02d}.wav"
-        logging.info(f"Tocando {sound_file}...")
+        logging.info(f"{sound_file}...")
         threading.Thread(target=play_sound, args=(sound_file,), daemon=True).start()
         time.sleep(0.5)
 
@@ -73,79 +77,85 @@ def append_sequence(seq_str):
 def get_random_win_offset():
     return random.choice([3, 4, 5, 6])
 
-def play_game():
-    user_sequence = []
-    click_count = 0
-
-    print("Aguardando a tecla '0' para iniciar...")
-    start_keyboard_listener()
-
+def wait_for_start_key():
+    print("Aguardando a tecla '0' para iniciar jogada...")
     while True:
         key = get_key()
         if key == '0':
-            setup_logging()
             logging.info("Tecla START ('0') pressionada")
             threading.Thread(target=play_sound, args=("start.wav",), daemon=True).start()
-            break
+            return
         time.sleep(0.1)
 
-    # Lê histórico
-    sequence_history = read_sequence_history()
-    total_attempts = len(sequence_history)
-    winning_attempt = total_attempts + get_random_win_offset()
-    logging.info(f"Tentativa sorteada para vitória: {winning_attempt}")
+def play_game():
+    start_keyboard_listener()
+    setup_logging()
 
-    start_time = time.time()
-    play_threads = []
+    jogada_atual = 0
+    winning_offset = get_random_win_offset()
+    winning_jogada = jogada_atual + winning_offset
 
-    while click_count < 6:
-        key = get_key()
-        if key and key in [str(i) for i in range(1, 10)]:
-            timestamp = time.time() - start_time
-            logging.info(f"Tecla '{key}' detectada aos {timestamp:.2f} segundos")
-            thread = threading.Thread(target=play_sound, args=(f"{int(key):02d}.wav",))
-            thread.start()
-            play_threads.append(thread)
-            user_sequence.append(key)
-            click_count += 1
-            time.sleep(0.5)
+    logging.info(f"Sorteio inicial: Jogada vencedora será a tentativa #{winning_jogada}")
 
-            if click_count == 6:
-                logging.info("Aguardando o fim dos sons da jogada...")
-                for t in play_threads:
-                    t.join()
+    while True:
+        jogada_atual += 1
+        reset_log_for_jogada(jogada_atual)
 
-                # Processa a jogada
-                seq_str = ",".join(map(str, user_sequence))
-                logging.info(f"Sequência registrada: {seq_str}")
+        user_sequence = []
+        click_count = 0
+        wait_for_start_key()
 
-                # Toca a sequência final (fXX.wav)
-                play_sequence(user_sequence)
+        start_time = time.time()
+        sequence_history = read_sequence_history()
 
-                is_unique = seq_str not in sequence_history
-                logging.info("Verificando unicidade da sequência...")
+        logging.info(f"Jogada atual: {jogada_atual}")
+        logging.info(f"Jogada premiada atual: {winning_jogada}")
 
-                if not is_unique:
-                    logging.warning("Sequência repetida detectada!")
-                    play_sound("obrigado.wav")
-                    logging.info("=== FIM DA JOGADA ===")
-                    break
+        play_threads = []
 
-                # Sequência inédita: salvar e verificar se é premiada
-                append_sequence(seq_str)
-                total_attempts += 1
+        while click_count < 6:
+            key = get_key()
+            if key and key in [str(i) for i in range(1, 10)]:
+                timestamp = time.time() - start_time
+                posicao = f"{click_count + 1:02d}"
+                logging.info(f"Posição: [{posicao}]")
+                thread = threading.Thread(target=play_sound, args=(f"{int(key):02d}.wav",))
+                thread.start()
+                play_threads.append(thread)
+                user_sequence.append(key)
+                click_count += 1
+                time.sleep(0.5)
 
-                if total_attempts == winning_attempt:
-                    logging.info("🎉 VENCEDOR DETECTADO!")
-                    play_sound("win.wav")
-                else:
-                    logging.info("Não foi premiado nesta tentativa.")
-                    play_sound("obrigado.wav")
+        logging.info("Aguardando o fim dos sons da jogada...")
+        for t in play_threads:
+            t.join()
 
-                logging.info("=== FIM DA JOGADA ===")
-                break
+        seq_str = ",".join(map(str, user_sequence))
+        logging.info(f"Sequência registrada: {seq_str}")
+        play_sequence(user_sequence)
 
-        time.sleep(0.1)
+        is_unique = seq_str not in sequence_history
+        if not is_unique:
+            logging.warning("Sequência repetida detectada.")
+            play_sound("obrigado.wav")
+            logging.info("=== FIM DA JOGADA ===")
+            continue
+
+        append_sequence(seq_str)
+
+        if jogada_atual == winning_jogada:
+            logging.info("🎉 JOGADA PREMIADA! Jogador venceu.")
+            play_sound("win.wav")
+            # SORTEIA próxima jogada premiada
+            winning_offset = get_random_win_offset()
+            winning_jogada = jogada_atual + winning_offset
+            logging.info(f"Próxima jogada sorteada para vitória: {winning_jogada}")
+        else:
+            logging.info("Jogada não premiada.")
+            play_sound("obrigado.wav")
+
+        logging.info("=== FIM DA JOGADA ===")
+        time.sleep(1)
 
 if __name__ == "__main__":
     try:
