@@ -1,3 +1,4 @@
+
 import logging
 import time
 import threading
@@ -25,15 +26,37 @@ btn_start = 37
 list_btns = [btn_1, btn_2, btn_3, btn_4, btn_5, btn_6, btn_7, btn_8, btn_9, btn_reset, btn_start]
 sensor = 40
 
+key_queue = queue.Queue()
+
+atexit.register(lambda: os.system('stty echo'))
+
+def setup_logging():
+    with open(LOG_FILE, "w") as f:
+        f.write("=== SISTEMA INICIADO ===\n")
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s - %(message)s',
+        handlers=[
+            logging.FileHandler(LOG_FILE),
+            logging.StreamHandler()
+        ]
+    )
+
 def log(value):
     logging.info(value)
     print(value)
 
+setup_logging()
 log("Iniciando GPIO")
+
 GPIO.setmode(GPIO.BOARD)
 for btn in list_btns:
-    GPIO.setup(btn, GPIO.IN, pull_up_down=GPIO.PUD_UP)    # Pino do botão como saída e aciona o pull-up
-GPIO.setup(sensor, GPIO.IN) # Sensor de proximidade
+    GPIO.setup(btn, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+GPIO.setup(sensor, GPIO.IN)
+
+# O restante do código original deve seguir daqui em diante, mantendo o uso de log()
+
+ # Sensor de proximidade
 
 key_queue = queue.Queue()
 
@@ -59,7 +82,7 @@ def reset_log_for_jogada(jogada_num):
 def play_sound(sound_file):
     full_path = f"samples/{sound_file}"
     try:
-        log(f"{sound_file}")
+      #  log(f"{sound_file}")
         subprocess.run(['aplay', full_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
       #  log(f"Som finalizado: {sound_file}")
     except Exception as e:
@@ -68,12 +91,19 @@ def play_sound(sound_file):
         logging.error(error)
 
 def play_sequence(user_sequence):
-    log("Iniciando sequência de sons (fXX.wav)...")
+    # log("Iniciando sequência de sons (XX.wav)...")
+    threads = []
     for key in user_sequence:
-        sound_file = f"f{int(key):02d}.wav"
+        sound_file = f"{int(key):02d}.wav"
         log(f"{sound_file}...")
-        threading.Thread(target=play_sound, args=(sound_file,), daemon=True).start()
-        time.sleep(0.5)
+        t = threading.Thread(target=play_sound, args=(sound_file,), daemon=True)
+        t.start()
+        threads.append(t)
+        time.sleep(0.7)
+    
+    for t in threads:
+        t.join()  # Espera o término de todos os sons antes de seguir
+
 
 def read_sequence_history():
     if not os.path.exists(DB_FILE):
@@ -92,7 +122,7 @@ has_play_card_sound = False
 def wait_for_start_or_reset_key():
     global has_play_card_sound
 
-    print("Aguardando a tecla de reset para limpar o jogo ou start para iniciar jogada...")
+    print("Aguardando a tecla start para iniciar jogada...")
     while True:
         if GPIO.input(sensor) == False and has_play_card_sound == False:
             has_play_card_sound = True
@@ -131,69 +161,94 @@ def play_game():
     global winning_jogada
 
     reset_game()
+    pending_win = False  # flag para próxima vitória garantida, se repetirem na jogada premiada
 
     while True:
         jogada_atual += 1
         reset_log_for_jogada(jogada_atual)
 
+        # coleta da sequência do jogador
         user_sequence = []
         click_count = 0
-        if wait_for_start_or_reset_key():
-            sequence_history = read_sequence_history()
+        if not wait_for_start_or_reset_key():
+            continue
 
-            log(f"Jogada atual: {jogada_atual}")
-            log(f"Jogada premiada atual: {winning_jogada}")
+        sequence_history = read_sequence_history()
+        log(f"Jogada atual: {jogada_atual}")
+        log(f"Jogada premiada atual: {winning_jogada}")
 
-            play_threads = []
+        # leitura dos 6 cliques
+        play_threads = []
+        while click_count < 6:
+            for idx, btn in enumerate(list_btns):
+                if GPIO.input(btn) == GPIO.LOW and idx < 9:  # apenas botões 1–9
+                    position = idx + 1
+                    t = threading.Thread(target=play_sound, args=(f"{position:02d}.wav",), daemon=True)
+                    t.start()
+                    play_threads.append(t)
+                    user_sequence.append(position)
+                    click_count += 1
+                    log(f"Posição: [{click_count:02d}]")
+                    time.sleep(0.5)
 
-            while click_count < 6:
-                for index in range(len(list_btns)):
-                    if GPIO.input(list_btns[index]) == GPIO.LOW:
-                        position = index + 1
-                        if position < 10:
-                            thread = threading.Thread(target=play_sound, args=(f"{position:02d}.wav",))
-                            thread.start()
-                            play_threads.append(thread)
-                            user_sequence.append(position)
-                            click_count += 1
-                            posicao = f"{click_count:02d}"
-                            log(f"Posição: [{posicao}]")
-                            time.sleep(0.5)
+        # espera todos os sons desta jogada terminarem
+        log("Aguardando o fim dos sons da jogada...")
+        for t in play_threads:
+            t.join()
 
-            log("Aguardando o fim dos sons da jogada...")
-            for t in play_threads:
-                t.join()
+        # registra e toca a sequência
+        seq_str = ",".join(map(str, user_sequence))
+        log(f"Sequência registrada: {seq_str}")
+        play_sequence(user_sequence)
 
-            seq_str = ",".join(map(str, user_sequence))
-            log(f"Sequência registrada: {seq_str}")
-            play_sequence(user_sequence)
+        is_unique = seq_str not in sequence_history
 
-            is_unique = seq_str not in sequence_history
-            if not is_unique:
-                error = "Sequência repetida detectada."
-                logging.warning(error)
-                print(error)
-                play_sound("obrigado.wav")
-                log("=== FIM DA JOGADA ===")
-                continue
+        # Se repetiu...
+        if not is_unique:
+            logging.warning("Sequência repetida detectada.")
+            print("Sequência repetida detectada.")
 
-            append_sequence(seq_str)
-
-            log("jogada atual: " + str(jogada_atual) + ", próxima jogada vencedora: " + str(winning_jogada))
-
-            if jogada_atual == winning_jogada:
-                log("🎉 JOGADA PREMIADA! Jogador venceu.")
-                play_sound("win.wav")
-                # SORTEIA próxima jogada premiada
-                winning_offset = get_random_win_offset()
-                winning_jogada = jogada_atual + winning_offset
-                log(f"Próxima jogada sorteada para vitória: {winning_jogada}")
+            # Se estávamos numa jogada premiada ou já tínhamos pending_win,
+            # mantemos pending_win = True para a próxima sequência original
+            if jogada_atual == winning_jogada or pending_win:
+                pending_win = True
+                log(" Sequência repetida na jogada premiada → próxima original SERÁ premiada")
             else:
-                log("Jogada não premiada.")
-                play_sound("obrigado.wav")
-
+                log(" Sequência repetida em jogada normal → sem efeito no sorteio")
+            play_sound("obrigado.wav")
             log("=== FIM DA JOGADA ===")
-            time.sleep(1)
+            continue
+
+        # Se chegou aqui, é sequência original: adiciona ao histórico
+        append_sequence(seq_str)
+
+        # Se havia um pending_win, esta jogada é premiada
+        if pending_win:
+            log("🎉 JOGADA PREMIADA (devido a repetição anterior)! Jogador venceu.")
+            play_sound("win.wav")
+            pending_win = False
+            # agora volta ao sorteio aleatório
+            winning_offset = get_random_win_offset()
+            winning_jogada = jogada_atual + winning_offset
+            log(f"Próxima jogada sorteada para vitória: {winning_jogada}")
+
+        # senão, se for a jogada sorteada originalmente
+        elif jogada_atual == winning_jogada:
+            log("🎉 JOGADA PREMIADA! Jogador venceu.")
+            play_sound("win.wav")
+            # sortear próxima vitória
+            winning_offset = get_random_win_offset()
+            winning_jogada = jogada_atual + winning_offset
+            log(f"Próxima jogada sorteada para vitória: {winning_jogada}")
+
+        # caso contrário, não premiada
+        else:
+            log("Jogada não premiada.")
+            play_sound("obrigado.wav")
+
+        log("=== FIM DA JOGADA ===")
+        time.sleep(1)
+
 
 if __name__ == "__main__":
     try:
