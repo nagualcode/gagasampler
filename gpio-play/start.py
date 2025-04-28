@@ -9,6 +9,9 @@ import subprocess
 import random
 import RPi.GPIO as GPIO
 
+# Configurações editáveis
+WIN_OFFSETS = [3, 4, 5, 6]  # Editar aqui para alterar os offsets possíveis
+
 # Arquivos de log e histórico
 LOG_FILE = "/tmp/gagasampler.log"
 DB_FILE = "/tmp/gagasampler.db"
@@ -23,10 +26,8 @@ btn_6 = 29
 btn_7 = 31
 btn_8 = 33
 btn_9 = 35
-btn_reset = 38
 btn_start = 37
-list_btns = [btn_1, btn_2, btn_3, btn_4, btn_5, btn_6, btn_7, btn_8, btn_9, btn_reset, btn_start]
-sensor = 40
+list_btns = [btn_1, btn_2, btn_3, btn_4, btn_5, btn_6, btn_7, btn_8, btn_9, btn_start]
 
 # Fila auxiliar
 key_queue = queue.Queue()
@@ -72,25 +73,11 @@ log("Iniciando GPIO")
 GPIO.setmode(GPIO.BOARD)
 for btn in list_btns:
     GPIO.setup(btn, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-GPIO.setup(sensor, GPIO.IN)
 
 # Funções auxiliares de jogo
 def reset_log_for_jogada(jogada_num):
     with open(LOG_FILE, "w") as f:
         f.write(f"=== NOVA JOGADA #{jogada_num} INICIADA ===\n")
-
-def play_sequence(user_sequence):
-    threads = []
-    log("Iniciando sequência de sons (XX.wav)...")
-    for key in user_sequence:
-        sound_file = f"{int(key):02d}.wav"
-        log(f"{sound_file}...")
-        t = threading.Thread(target=play_sound, args=(sound_file,), daemon=True)
-        t.start()
-        threads.append(t)
-        time.sleep(0.7)
-    for t in threads:
-        t.join()
 
 def read_sequence_history():
     if not os.path.exists(DB_FILE):
@@ -103,27 +90,15 @@ def append_sequence(seq_str):
         f.write(seq_str + "\n")
 
 def get_random_win_offset():
-    return random.choice([3, 4, 5, 6])
+    return random.choice(WIN_OFFSETS)
 
-# Função que aguarda start/reset
-has_play_card_sound = False
-def wait_for_start_or_reset_key():
-    global has_play_card_sound
+# Função que aguarda start
+def wait_for_start_key():
     print("Aguardando a tecla start para iniciar jogada...")
     while True:
-        if GPIO.input(sensor) == False and not has_play_card_sound:
-            has_play_card_sound = True
-            log("Sensor ativo")
-            threading.Thread(target=play_sound, args=("card.wav",), daemon=True).start()
-        if GPIO.input(btn_reset) == GPIO.LOW:
-            has_play_card_sound = False
-            log("Tecla RESET pressionada")
-            reset_game()
-            return False
         if GPIO.input(btn_start) == GPIO.LOW:
-            has_play_card_sound = False
             log("Tecla START pressionada")
-            threading.Thread(target=play_sound, args=("start.wav",), daemon=True).start()
+            threading.Thread(target=play_sound, args=("card.wav",), daemon=True).start()
             return True
         time.sleep(0.1)
 
@@ -149,7 +124,7 @@ def play_game():
         jogada_atual += 1
         reset_log_for_jogada(jogada_atual)
 
-        if not wait_for_start_or_reset_key():
+        if not wait_for_start_key():
             continue
 
         sequence_history = read_sequence_history()
@@ -177,10 +152,9 @@ def play_game():
         for t in play_threads:
             t.join()
 
-        # Registro e replay da sequência
+        # Registro da sequência
         seq_str = ",".join(map(str, user_sequence))
         log(f"Sequência registrada: {seq_str}")
-        play_sequence(user_sequence)
 
         is_unique = seq_str not in sequence_history
 
