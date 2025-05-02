@@ -2,20 +2,37 @@
 <html lang="pt">
 <head>
     <meta charset="UTF-8">
-    <title>Gaga Sampler 3</title>
+    <title>Gaga Sampler</title>
     <style>
-        html, body {
-            margin: 0;
-            padding: 0;
-            background: #222;
-            color: white;
-            font-family: sans-serif;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            overflow: hidden;
-        }
+/* 1) garantimos que o html cubra 100% da viewport */
+html {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+
+  /* só aqui o gradiente, 1 camada, fixo na viewport */
+  background: linear-gradient(
+    90deg,
+    rgba(2,   0,   36, 1)  0%,
+    rgba(107, 107, 199,1) 35%,
+    rgba(0,   134, 161,1)100%
+  ) no-repeat center center fixed;
+  background-size: cover;
+}
+
+/* 2) o body deixa o html “transparente” brilhar por trás */
+body {
+  margin: 0;
+  padding: 0;
+  height: 100vh;          /* garante o full-screen */
+  background: transparent;/* nada aqui */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  overflow: hidden;
+  color: white;
+}
+
         #startScreen, #resultScreen {
             position: absolute;
             z-index: 2;
@@ -37,6 +54,10 @@
             width: 90vmin;
             height: 90vmin;
             gap: 5px;
+    background-color: rgba(0, 0, 0, 0.5);  /* Fundo opaco para a grid */
+    gap: 15px;
+    padding: 10px;
+    border-radius: 20px
         }
         .grid-item {
             background-size: cover;
@@ -53,6 +74,34 @@
             from {transform: rotate(0deg);}
             to {transform: rotate(360deg);}
         }
+#startBtn {
+    padding: 20px 40px;
+    font-size: 24px;
+    border: none;
+    border-radius: 10px;
+    background: #4caf50;
+    color: white;
+    cursor: pointer;
+}
+
+#startBtn:disabled {
+    background: url('waveform.webp') center center no-repeat;
+    background-size: cover;
+    color: transparent;
+    cursor: default;
+}
+
+html.win-background {
+    background: url('win.webp') center center no-repeat;
+    background-size: cover;
+}
+
+html.obrigado-background {
+    background: url('obrigado.webp') center center no-repeat;
+    background-size: cover;
+}
+
+
     </style>
 </head>
 <body>
@@ -83,7 +132,7 @@
     let playingAudios = [];
 
     function getRandomWinAttempt() {
-        const options = [3, 4, 5, 6];
+        const options = [2, 3];
         const chosen = options[Math.floor(Math.random() * options.length)];
         console.log(`🎲 Nova tentativa sorteada para vitória: tentativa número ${chosen}`);
         return chosen;
@@ -117,7 +166,7 @@
         const promises = [];
 
         userSequence.forEach((num, index) => {
-            const audioFile = `audio/f${num.toString().padStart(2, "0")}.mp3`;
+            const audioFile = `f${num.toString().padStart(2, "0")}.mp3`;
 
             const promise = new Promise((resolve) => {
                 setTimeout(() => {
@@ -137,17 +186,24 @@
         await Promise.all(promises);
     };
 
-    const resetGame = () => {
-        console.log("🔄 Reiniciando jogo...");
-        startScreen.style.display = "flex";
-        resultScreen.style.display = "none";
-        grid.style.display = "none";
-        grid.innerHTML = "";
-        clickCount = 0;
-        currentImageDiv = null;
-        userSequence = [];
-        playingAudios = [];
-    };
+const resetGame = () => {
+    console.log("🔄 Reiniciando jogo...");
+    startScreen.style.display = "flex";
+    resultScreen.style.display = "none";
+    grid.style.display = "none";
+    grid.innerHTML = "";
+    clickCount = 0;
+    currentImageDiv = null;
+    userSequence = [];
+    playingAudios = [];
+
+    // Reabilita o botão START removendo estilos inline
+    const startBtn = document.getElementById("startBtn");
+    startBtn.disabled = false;
+    startBtn.removeAttribute("style"); // limpa estilos inline
+};
+
+
 
     const handleResult = async () => {
         console.log("🎯 6 cliques realizados. Aguardando final do último áudio...");
@@ -162,7 +218,7 @@
         resultScreen.style.display = "flex";
         grid.style.display = "none";
         resultText.innerText = "Conferindo a Sequência Digitada...";
-        await playFeedbackSequence();
+      //  await playFeedbackSequence();
 
         totalGames++;
         const sequenceString = userSequence.join(",");
@@ -203,10 +259,20 @@
         }
 
         const msg = isWinner ? "VOCÊ VENCEU!" : "OBRIGADO POR PARTICIPAR!";
-        const resultAudio = isWinner ? "audio/win.mp3" : "audio/obrigado.mp3";
+        const resultAudio = isWinner ? "win.mp3" : "obrigado.mp3";
+        
+if (isWinner) {
+    document.documentElement.classList.add("win-background");
+} else {
+    document.documentElement.classList.add("obrigado-background");
+}
+
 
         resultText.innerText = msg;
         await playAudio(resultAudio);
+document.documentElement.classList.remove("win-background");
+document.documentElement.classList.remove("obrigado-background");
+
         resetGame();
     };
 
@@ -219,12 +285,12 @@
             const div = document.createElement("div");
             const imgFile = i.toString().padStart(2, '0');
             div.classList.add("grid-item");
-            div.style.backgroundImage = `url('img/${imgFile}.jpg')`;
+            div.style.backgroundImage = `url('${imgFile}.jpg')`;
 
             div.addEventListener("click", async () => {
                 if (clickCount >= 6) return;
 
-                const imageAudio = `audio/${imgFile}.mp3`;
+                const imageAudio = `${imgFile}.mp3`;
 
                 console.log(`🖼️ Imagem ${i} clicada. Clique número: ${clickCount + 1}`);
                 div.classList.add("rotate");
@@ -242,11 +308,15 @@
         }
     };
 
-    document.getElementById("startBtn").addEventListener("click", async () => {
-        console.log("🎬 Botão START clicado.");
-        await playAudio("audio/start.mp3");
-        showGrid();
-    });
+document.getElementById("startBtn").addEventListener("click", async () => {
+    const startBtn = document.getElementById("startBtn");
+    startBtn.disabled = true;
+    startBtn.style.cursor = "not-allowed";
+    console.log("🎬 Botão START clicado.");
+    await playAudio("start.mp3");
+    showGrid();
+});
+
 </script>
 
 

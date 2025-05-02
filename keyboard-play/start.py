@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import logging
 import time
 import threading
@@ -8,29 +9,36 @@ import subprocess
 import random
 from sshkeyboard import listen_keyboard
 
+# Configurações editáveis
+WIN_OFFSETS = [3, 4, 5, 6]
+
+# Arquivos de log e histórico
 LOG_FILE = "/tmp/gagasampler.log"
 DB_FILE = "/tmp/gagasampler.db"
 
+# Mapeamento de teclas
+BTN_KEYS = {
+    "1": 1,
+    "2": 2,
+    "3": 3,
+    "4": 4,
+    "5": 5,
+    "6": 6,
+    "7": 7,
+    "8": 8,
+    "9": 9,
+}
+START_KEY = "0"
+VALID_KEYS = list(BTN_KEYS.keys())
+ALL_KEYS = VALID_KEYS + [START_KEY]
+
+# Fila de teclas pressionadas
 key_queue = queue.Queue()
 
-# Restaura o echo do terminal ao sair
+# Garante echo do terminal ao sair
 atexit.register(lambda: os.system('stty echo'))
 
-def on_press(key):
-    key_queue.put(key)
-
-def start_keyboard_listener():
-    threading.Thread(
-        target=lambda: listen_keyboard(on_press=on_press),
-        daemon=True
-    ).start()
-
-def get_key(timeout=0.1):
-    try:
-        return key_queue.get(timeout=timeout)
-    except queue.Empty:
-        return None
-
+# Configuração do logging
 def setup_logging():
     with open(LOG_FILE, "w") as f:
         f.write("=== SISTEMA INICIADO ===\n")
@@ -43,122 +51,147 @@ def setup_logging():
         ]
     )
 
-def reset_log_for_jogada(jogada_num):
-    with open(LOG_FILE, "w") as f:
-        f.write(f"=== NOVA JOGADA #{jogada_num} INICIADA ===\n")
+def log(value):
+    logging.info(value)
+    print(value)
 
 def play_sound(sound_file):
     full_path = f"samples/{sound_file}"
     try:
-        logging.info(f"{sound_file}")
+        log(f"Tocando: {sound_file}")
         subprocess.run(['aplay', full_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-      #  logging.info(f"Som finalizado: {sound_file}")
     except Exception as e:
-        logging.error(f"Erro ao tocar {sound_file}: {e}")
+        error = f"Erro ao tocar {sound_file}: {e}"
+        print(error)
+        logging.error(error)
 
-def play_sequence(user_sequence):
-    logging.info("Iniciando sequência de sons (fXX.wav)...")
-    for key in user_sequence:
-        sound_file = f"f{int(key):02d}.wav"
-        logging.info(f"{sound_file}...")
-        threading.Thread(target=play_sound, args=(sound_file,), daemon=True).start()
-        time.sleep(0.5)
+def reset_log_for_jogada(jogada_num):
+    with open(LOG_FILE, "w") as f:
+        f.write(f"=== NOVA JOGADA #{jogada_num} INICIADA ===\n")
 
 def read_sequence_history():
     if not os.path.exists(DB_FILE):
         return set()
     with open(DB_FILE, "r") as f:
-        return set(line.strip() for line in f.readlines())
+        return set(line.strip() for line in f)
 
 def append_sequence(seq_str):
     with open(DB_FILE, "a") as f:
         f.write(seq_str + "\n")
 
 def get_random_win_offset():
-    return random.choice([3, 4, 5, 6])
+    return random.choice(WIN_OFFSETS)
+
+# Handler do teclado
+def press_handler(key):
+    if key in ALL_KEYS:
+        key_queue.put(key)
 
 def wait_for_start_key():
-    print("Aguardando a tecla '0' para iniciar jogada...")
+    print("Aguardando a tecla start para iniciar jogada...")
     while True:
-        key = get_key()
-        if key == '0':
-            logging.info("Tecla START ('0') pressionada")
-            threading.Thread(target=play_sound, args=("start.wav",), daemon=True).start()
-            return
+        key = key_queue.get()
+        if key == START_KEY:
+            log("Tecla START pressionada")
+            threading.Thread(target=play_sound, args=("card.wav",), daemon=True).start()
+            return True
         time.sleep(0.1)
 
-def play_game():
-    start_keyboard_listener()
-    setup_logging()
+# Variáveis de controle de jogo
+jogada_atual = 0
+winning_offset = 0
+winning_jogada = 0
 
+def reset_game():
+    global jogada_atual, winning_offset, winning_jogada
+    setup_logging()
     jogada_atual = 0
     winning_offset = get_random_win_offset()
     winning_jogada = jogada_atual + winning_offset
+    log(f"Sorteio inicial: Jogada vencedora será a tentativa #{winning_jogada}")
 
-    logging.info(f"Sorteio inicial: Jogada vencedora será a tentativa #{winning_jogada}")
+def play_game():
+    global jogada_atual, winning_offset, winning_jogada
+    reset_game()
+    pending_win = False
 
     while True:
         jogada_atual += 1
         reset_log_for_jogada(jogada_atual)
 
+        if not wait_for_start_key():
+            continue
+
+        sequence_history = read_sequence_history()
+        log(f"Jogada atual: {jogada_atual}")
+        log(f"Jogada premiada atual: {winning_jogada}")
+
+        # Captura da sequência
         user_sequence = []
         click_count = 0
-        wait_for_start_key()
-
-        start_time = time.time()
-        sequence_history = read_sequence_history()
-
-        logging.info(f"Jogada atual: {jogada_atual}")
-        logging.info(f"Jogada premiada atual: {winning_jogada}")
-
         play_threads = []
-
         while click_count < 6:
-            key = get_key()
-            if key and key in [str(i) for i in range(1, 10)]:
-                timestamp = time.time() - start_time
-                posicao = f"{click_count + 1:02d}"
-                logging.info(f"Posição: [{posicao}]")
-                thread = threading.Thread(target=play_sound, args=(f"{int(key):02d}.wav",))
-                thread.start()
-                play_threads.append(thread)
-                user_sequence.append(key)
+            key = key_queue.get()
+            if key in VALID_KEYS:
+                position = BTN_KEYS[key]
+                t = threading.Thread(target=play_sound, args=(f"{position:02d}.wav",), daemon=True)
+                t.start()
+                play_threads.append(t)
+                user_sequence.append(position)
                 click_count += 1
+                log(f"Posição: [{click_count:02d}]")
                 time.sleep(0.5)
 
-        logging.info("Aguardando o fim dos sons da jogada...")
+        # Espera todos os sons da jogada
+        log("Aguardando o fim dos sons da jogada...")
         for t in play_threads:
             t.join()
 
+        # Registro da sequência
         seq_str = ",".join(map(str, user_sequence))
-        logging.info(f"Sequência registrada: {seq_str}")
-        play_sequence(user_sequence)
+        log(f"Sequência registrada: {seq_str}")
 
         is_unique = seq_str not in sequence_history
+
+        # Lógica de repetição e premiação
         if not is_unique:
             logging.warning("Sequência repetida detectada.")
+            print("Sequência repetida detectada.")
+            if jogada_atual == winning_jogada or pending_win:
+                pending_win = True
+                log(" Sequência repetida na jogada premiada → próxima original SERÁ premiada")
+            else:
+                log(" Sequência repetida em jogada normal → sem efeito no sorteio")
             play_sound("obrigado.wav")
-            logging.info("=== FIM DA JOGADA ===")
+            log("=== FIM DA JOGADA ===")
             continue
 
         append_sequence(seq_str)
 
-        if jogada_atual == winning_jogada:
-            logging.info("🎉 JOGADA PREMIADA! Jogador venceu.")
+        if pending_win:
+            log("🎉 JOGADA PREMIADA (devido a repetição anterior)! Jogador venceu.")
             play_sound("win.wav")
-            # SORTEIA próxima jogada premiada
+            pending_win = False
             winning_offset = get_random_win_offset()
             winning_jogada = jogada_atual + winning_offset
-            logging.info(f"Próxima jogada sorteada para vitória: {winning_jogada}")
+            log(f"Próxima jogada sorteada para vitória: {winning_jogada}")
+        elif jogada_atual == winning_jogada:
+            log("🎉 JOGADA PREMIADA! Jogador venceu.")
+            play_sound("win.wav")
+            winning_offset = get_random_win_offset()
+            winning_jogada = jogada_atual + winning_offset
+            log(f"Próxima jogada sorteada para vitória: {winning_jogada}")
         else:
-            logging.info("Jogada não premiada.")
+            log("Jogada não premiada.")
             play_sound("obrigado.wav")
 
-        logging.info("=== FIM DA JOGADA ===")
+        log("=== FIM DA JOGADA ===")
         time.sleep(1)
 
 if __name__ == "__main__":
     try:
+        threading.Thread(target=listen_keyboard, kwargs={"on_press": press_handler, "delay_second_char": 0.1}, daemon=True).start()
+        play_sound("on.wav")
         play_game()
     except KeyboardInterrupt:
-        logging.info("Jogo encerrado manualmente")
+        log("Jogo encerrado manualmente")
